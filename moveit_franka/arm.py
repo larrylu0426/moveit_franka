@@ -4,7 +4,7 @@ from action_msgs.msg import GoalStatus
 from builtin_interfaces.msg import Duration
 from geometry_msgs.msg import Pose, Quaternion
 from moveit_msgs.action import ExecuteTrajectory
-from moveit_msgs.msg import RobotState, WorkspaceParameters, Constraints, PositionConstraint, OrientationConstraint
+from moveit_msgs.msg import RobotState, WorkspaceParameters, Constraints, PositionConstraint, OrientationConstraint, JointConstraint
 from moveit_msgs.srv import GetPositionIK, GetPositionFK, GetMotionPlan, GetCartesianPath
 from rclpy.action import ActionClient
 from rclpy.executors import SingleThreadedExecutor
@@ -16,6 +16,7 @@ from moveit_franka.util import Subscriber
 
 IK_LINK = 'panda_hand_tcp'
 BASE_LINK = "panda_link0"
+JOINT_PREFIX = 'panda_joint'
 PLANNING_GROUP = "panda_arm"
 
 
@@ -51,6 +52,21 @@ class Arm(Node):
         ws_param.max_corner.y = workspace_dim
         ws_param.max_corner.z = workspace_dim
         return ws_param
+
+    def _get_joint_constraints(self, goal_joint, joint_tolerance):
+        #Populate and return constraints message
+        constraint = Constraints()
+        constraint.name = 'joint_constraints'
+        joint_names = [JOINT_PREFIX+f"{i}" for i in range(1, 8)]
+        for joint, value in zip(joint_names, goal_joint):
+            ja_const = JointConstraint()
+            ja_const.joint_name = joint
+            ja_const.position = value
+            ja_const.tolerance_above = joint_tolerance
+            ja_const.tolerance_below = joint_tolerance
+            ja_const.weight = 1.0
+            constraint.joint_constraints.append(ja_const)
+        return constraint
 
     def _get_position_constraint(self, position: Pose,
                                  pos_tolerance: float) -> PositionConstraint:
@@ -175,17 +191,9 @@ class Arm(Node):
             return res.solution
 
     @check
-    def plan_pose(
-        self,
-        goal_pose,
-        pos_tolerance,
-        ang_tolerance,
-        fix_ee_orientation,
-        num_attempts,
-        timeout,
-        path_ang_tol,
-        velocity_scaling,
-    ):
+    def plan_pose(self, goal_pose, pos_tolerance, ang_tolerance,
+                  fix_ee_orientation, num_attempts, timeout, path_ang_tol,
+                  velocity_scaling):
         req = GetMotionPlan.Request()
         req.motion_plan_request.workspace_parameters = self._get_workspace_params(
         )
@@ -201,6 +209,32 @@ class Arm(Node):
                 self._get_orientation_constraint(goal_pose.orientation,
                                                  path_ang_tol))
             req.motion_plan_request.path_constraints = path_const
+        req.motion_plan_request.group_name = PLANNING_GROUP
+        req.motion_plan_request.num_planning_attempts = num_attempts
+        req.motion_plan_request.allowed_planning_time = timeout
+        req.motion_plan_request.max_velocity_scaling_factor = velocity_scaling
+        future = self.mp.call_async(req)
+        res = self._process_future(future)
+        if res.motion_plan_response.error_code.val != 1:
+            self.get_logger().error(
+                f"Motion plan failed. Error code: {res.motion_plan_response.error_code.val}"
+            )
+            return None
+        else:
+            self.get_logger().info(
+                f"Motion plan was successful! Planning took {res.motion_plan_response.planning_time} seconds"
+            )
+            return res.motion_plan_response.trajectory
+
+    @check
+    def plan_joint(self, goal_joint, joint_tolerance, num_attempts, timeout,
+                   velocity_scaling):
+        req = GetMotionPlan.Request()
+        req.motion_plan_request.workspace_parameters = self._get_workspace_params(
+        )
+        req.motion_plan_request.start_state = self.get_current_joint_state()
+        req.motion_plan_request.goal_constraints.append(
+            self._get_joint_constraints(goal_joint, joint_tolerance))
         req.motion_plan_request.group_name = PLANNING_GROUP
         req.motion_plan_request.num_planning_attempts = num_attempts
         req.motion_plan_request.allowed_planning_time = timeout
@@ -286,6 +320,29 @@ class Arm(Node):
             timeout=timeout_s,
             path_ang_tol=path_ang_tol,
             velocity_scaling=velocity_scaling,
+        )
+        if trajectory is None:
+            return False
+        return self.execute_trajectory(trajectory)
+
+    @check
+    def move_joint(
+        self,
+        joint_states,
+        tolerance,
+        velocity_scaling = 1.0,
+        num_attempts = 10,
+        timeout_s = 2.0,
+    ):
+        if len(joint_states) != 7:
+            print(f"Expected goal joint angles to have length: 7. Instead received length: {len(joint_states)}")
+            return False
+        trajectory = self.plan_joint(
+            goal_joint=joint_states,
+            joint_tolerance=tolerance,
+            num_attempts=num_attempts,
+            timeout=timeout_s,
+            velocity_scaling=velocity_scaling
         )
         if trajectory is None:
             return False
