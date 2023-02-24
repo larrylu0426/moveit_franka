@@ -41,16 +41,16 @@ class Arm(Node):
         self.traj = ActionClient(self, ExecuteTrajectory,
                                  '/execute_trajectory')
 
-    def _get_workspace_params(self, workspace_dim=5.0):
+    def _get_workspace_params(self, min_corner=[0.0, 0.0, 0.0], max_corner=[1.0, 1.0, 1.0]):
         ws_param = WorkspaceParameters()
         ws_param.header.stamp = self.get_clock().now().to_msg()
         ws_param.header.frame_id = BASE_LINK
-        ws_param.min_corner.x = workspace_dim
-        ws_param.min_corner.y = workspace_dim
-        ws_param.min_corner.z = workspace_dim
-        ws_param.max_corner.x = workspace_dim
-        ws_param.max_corner.y = workspace_dim
-        ws_param.max_corner.z = workspace_dim
+        ws_param.min_corner.x = min_corner[0]
+        ws_param.min_corner.y = min_corner[1]
+        ws_param.min_corner.z = min_corner[2]
+        ws_param.max_corner.x = max_corner[0]
+        ws_param.max_corner.y = max_corner[1]
+        ws_param.max_corner.z = max_corner[2]
         return ws_param
 
     def _get_joint_constraints(self, goal_joint, joint_tolerance):
@@ -273,7 +273,7 @@ class Arm(Node):
                 f"Motion plan failed. Error code: {res.error_code.val}")
             return None
         else:
-            self.get_logger().info(f"Cartesian plan was successful!")
+            self.get_logger().info("Cartesian plan was successful!")
             return res.solution
 
     @check
